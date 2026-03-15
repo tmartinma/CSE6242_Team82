@@ -4,4 +4,8 @@ data/concate_data/*.parquet
 data/concate_data/*.parquet
 AutogluonModels/
 *.pkl
+<<<<<<< Updated upstream
 *.parquet
+=======
+*.parquet
+>>>>>>> Stashed changes
