@@ -2,5 +2,6 @@ data/concate_data/*.parquet
 data/concate_data/*.parquet
 
 data/concate_data/*.parquet
-AutogluonModels/*.pkl
-AutogluonModels/*.parquet
+AutogluonModels/
+*.pkl
+*.parquet
