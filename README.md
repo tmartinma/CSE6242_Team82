@@ -5,7 +5,7 @@ Data Links:
 https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page <br>
 Prosessed data URL through shared drive in parquet format: <br>
 
-## AutoGluon Installation:<br>
+## AutoGluon Installation: https://auto.gluon.ai/stable/install.html <br>
 conda create -n autogluon-win python=3.10 -y<br>
 conda activate autogluon-win<br>
 
