@@ -4,3 +4,6 @@ Spring 2026 Gatech CSE6242 Group Project
 Data Links:
 https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
 Prosessed data URL through shared drive in parquet format: 
+AutoGluon Installation:
+conda create -n autogluon-win python=3.10 -y
+conda activate autogluon-win
