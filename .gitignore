@@ -1,4 +1,3 @@
 data/concate_data/*.parquet
-data/concate_data/*.parquet
-
-data/concate_data/*.parquet
+data/green_taxi_2025/*_all.parquet
+data/yellow_taxi_2025/*_all.parquet
