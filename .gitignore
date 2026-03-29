@@ -8,3 +8,7 @@ data/yellow_taxi_2025/*_all.parquet
 AutogluonModels/
 *.pkl
 .DS_Store
+*.db
+__pycache__/
+.ipynb_checkpoints/
+*.pyc
