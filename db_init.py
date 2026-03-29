@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 
 # --- CONFIGURATION ---
 # NOTE: HAVE LOCAL MEMORY ISSUES WITH YELLOW TAXI DATA. USE GREEN IN MVP FOR NOW.
-# folders = {"green": "./data/green_taxi_2025", "yellow": "./data/yellow_taxi_2025"}
+folders = {"yellow": "./data/yellow_taxi_2025"}
 folders = {"green": "./data/green_taxi_2025"}
 shapefile_path = "./data/taxi_zones/taxi_zones.shp"
 db_name = "local_db.db"
