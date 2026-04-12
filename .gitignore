@@ -5,8 +5,8 @@ data/green_taxi_2025/*_all.parquet
 data/yellow_taxi_2025/*_all.parquet
 
 # Models and Objects
-AutogluonModels/
 *.pkl
+!AutogluonModels/**/*.pkl
 .DS_Store
 *.db
 __pycache__/
