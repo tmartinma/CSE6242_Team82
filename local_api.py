@@ -30,7 +30,7 @@ app = FastAPI(
     version="1.1.0",
 )
 
-# Allow all origins for local UI dev — tighten in production
+# Allow all origins for local UI dev
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,13 +39,13 @@ app.add_middleware(
 )
 
 # ─── Global state ─────────────────────────────────────────────────────────────
-MODEL_PATH   = "AutogluonModels/yellow_duration_quick"
-CENTROID_CSV = "data/taxi_zone_centroids.csv"   # path relative to working dir
+MODEL_PATH   = "AutogluonModels/taxi_duration_quick"
+CENTROID_CSV = "data/taxi_zone_centroids.csv"
 
-_predictor       = None   # AutoGluon predictor, loaded lazily
-_zones_df        = None   # centroid lookup table, loaded lazily
+_predictor       = None   
+_zones_df        = None   
 _training_status = {
-    "status":      "idle",  # idle | running | done | error
+    "status":      "idle",
     "message":     "",
     "started_at":  None,
     "finished_at": None,
@@ -54,27 +54,19 @@ _training_status = {
 
 # ─── Zone helpers ──────────────────────────────────────────────────────────────
 def get_zones_df() -> pd.DataFrame:
-    """
-    Load (or return cached) the centroid CSV as a DataFrame indexed by LocationID.
-    Expected columns: LocationID, zone, borough, centroid_lon, centroid_lat
-    """
     global _zones_df
     if _zones_df is None:
         path = Path(CENTROID_CSV)
         if not path.exists():
             raise HTTPException(
                 status_code=404,
-                detail=f"Centroid CSV not found at '{CENTROID_CSV}'. "
-                       "Generate it first with the geo-processing script.",
+                detail=f"Centroid CSV not found at '{CENTROID_CSV}'.",
             )
-        logger.info("Loading centroid CSV from %s …", CENTROID_CSV)
         _zones_df = pd.read_csv(path).set_index("LocationID")
-        logger.info("Loaded %d zones.", len(_zones_df))
     return _zones_df
 
 
 def zone_record(location_id: int) -> Optional[dict]:
-    """Return a single zone dict for location_id, or None if not found."""
     df = get_zones_df()
     if location_id not in df.index:
         return None
@@ -89,7 +81,6 @@ def zone_record(location_id: int) -> Optional[dict]:
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance in km between two (lat, lon) points."""
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -102,7 +93,6 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 # ─── AutoGluon helpers ────────────────────────────────────────────────────────
 def get_predictor():
-    """Load (or return cached) AutoGluon predictor."""
     global _predictor
     if _predictor is None:
         from autogluon.tabular import TabularPredictor
@@ -112,62 +102,37 @@ def get_predictor():
                 status_code=404,
                 detail=f"No trained model found at '{MODEL_PATH}'. Call POST /train first.",
             )
-        logger.info("Loading predictor from %s …", MODEL_PATH)
-        _predictor = TabularPredictor.load(str(path))
-        logger.info("Predictor loaded.")
+        _predictor = TabularPredictor.load(str(path), require_version_match=False)
     return _predictor
 
-
 def build_feature_row(trip: "TripInput") -> dict:
-    """Convert a TripInput into the feature dict AutoGluon expects."""
-    pickup_dt = pd.to_datetime(trip.pickup_datetime)
+    """
+    Matches the 4 features used in AutoML.ipynb exactly.
+    Using VendorID or total_amount here would cause a model mismatch error.
+    """
     return {
-        "VendorID":             trip.vendor_id,
-        "tpep_pickup_datetime": pickup_dt,
-        "passenger_count":      trip.passenger_count,
-        "trip_distance":        trip.trip_distance,
-        "RatecodeID":           trip.ratecode_id,
-        "PULocationID":         trip.pu_location_id,
-        "DOLocationID":         trip.do_location_id,
-        "payment_type":         trip.payment_type,
-        "fare_amount":          trip.fare_amount,
-        "extra":                trip.extra,
-        "mta_tax":              trip.mta_tax,
-        "tip_amount":           trip.tip_amount,
-        "tolls_amount":         trip.tolls_amount,
-        "improvement_surcharge":trip.improvement_surcharge,
-        "total_amount":         trip.total_amount,
-        "congestion_surcharge": trip.congestion_surcharge,
-        "Airport_fee":          trip.airport_fee,
-        "cbd_congestion_fee":   trip.cbd_congestion_fee,
+        "fare_amount":   trip.fare_amount,
+        "PULocationID":  trip.pu_location_id,
+        "DOLocationID":  trip.do_location_id,
+        "trip_distance": trip.trip_distance,
     }
 
 
 # ─── Pydantic schemas ──────────────────────────────────────────────────────────
 class TripInput(BaseModel):
-    """Single trip feature row (mirrors yellow_model_df minus dropoff_datetime)."""
-    pickup_datetime:       str   = Field(...,  example="2025-03-01 08:30:00")
-    vendor_id:             int   = Field(1,    example=1)
-    passenger_count:       float = Field(1.0,  example=1.0)
-    trip_distance:         float = Field(...,  example=2.5)
-    ratecode_id:           float = Field(1.0,  example=1.0)
-    pu_location_id:        int   = Field(...,  example=161)
-    do_location_id:        int   = Field(...,  example=236)
-    payment_type:          int   = Field(1,    example=1)
-    fare_amount:           float = Field(...,  example=12.5)
-    extra:                 float = Field(0.0,  example=3.5)
-    mta_tax:               float = Field(0.5,  example=0.5)
-    tip_amount:            float = Field(0.0,  example=2.0)
-    tolls_amount:          float = Field(0.0,  example=0.0)
-    improvement_surcharge: float = Field(1.0,  example=1.0)
-    total_amount:          float = Field(...,  example=19.5)
-    congestion_surcharge:  float = Field(2.5,  example=2.5)
-    airport_fee:           float = Field(0.0,  example=0.0)
-    cbd_congestion_fee:    float = Field(0.0,  example=0.0)
+    pickup_datetime:       str
+    trip_distance:         float
+    pu_location_id:        int
+    do_location_id:        int
+    fare_amount:           float
+    # These fields are included for compatibility with the Web Server proxy
+    vendor_id:             Optional[int]   = 1
+    passenger_count:       Optional[float] = 1.0
+    total_amount:          Optional[float] = None
+    congestion_surcharge:  Optional[float] = 2.5
 
 
 class ZoneInfo(BaseModel):
-    """Centroid metadata for one taxi zone."""
     location_id:  int
     zone:         str
     borough:      str
@@ -176,7 +141,6 @@ class ZoneInfo(BaseModel):
 
 
 class TripPrediction(BaseModel):
-    """Prediction result for a single trip, enriched with zone coordinates."""
     predicted_duration_minutes: float
     pickup_zone:                Optional[ZoneInfo]
     dropoff_zone:               Optional[ZoneInfo]
@@ -194,17 +158,13 @@ class PredictResponse(BaseModel):
 
 
 class TrainRequest(BaseModel):
-    data_path: str = Field(
-        "data/concate_data/yellow_tripdata_2025_all.parquet",
-        description="Path to yellow parquet file (relative to working dir)",
-    )
-    sample_n:   int = Field(200_000, ge=1000,  le=5_000_000)
-    time_limit: int = Field(300,     ge=60,    description="AutoGluon time limit (seconds)")
-    model_path: str = Field(MODEL_PATH,        description="Where to save the model")
+    data_path: str = "data/concate_data/combined_tripdata_2025_all.parquet"
+    sample_n:   int = Field(100_000, ge=1000)
+    time_limit: int = Field(300, ge=60)
+    model_path: str = MODEL_PATH
 
 
 class NearbyZone(BaseModel):
-    """Nearest zone result, includes distance from the query point."""
     location_id:    int
     zone:           str
     borough:        str
@@ -220,26 +180,29 @@ def _train_task(req: TrainRequest):
 
     _training_status["status"]     = "running"
     _training_status["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    
     try:
         logger.info("Loading data from %s …", req.data_path)
         df = pd.read_parquet(req.data_path)
 
-        # Feature engineering — compute trip duration in minutes
+        # 1. Resolve Column Names (Fixes KeyError)
+        p_col = "tpep_pickup_datetime" if "tpep_pickup_datetime" in df.columns else "pickup_datetime"
+        d_col = "tpep_dropoff_datetime" if "tpep_dropoff_datetime" in df.columns else "dropoff_datetime"
+
+        # 2. Compute Target Variable
         df["duration"] = (
-            (df["tpep_dropoff_datetime"] - df["tpep_pickup_datetime"]).dt.total_seconds() / 60
+            (df[d_col] - df[p_col]).dt.total_seconds() / 60
         ).round(2)
 
-        # Keep only valid durations (0–70 min), matching notebook filter
+        # 3. Filter and Select Features (Matches Prediction Schema)
         df = df[(df["duration"] > 0) & (df["duration"] <= 70)].copy()
+        feature_cols = ["fare_amount", "PULocationID", "DOLocationID", "trip_distance", "duration"]
+        df = df[feature_cols].dropna().copy()
 
-        # Drop columns that leak the target or are always null
-        drop_cols = [c for c in ["tpep_dropoff_datetime", "store_and_fwd_flag"] if c in df.columns]
-        df = df.drop(columns=drop_cols)
-
-        # Sub-sample for faster training runs
+        # 4. Sampling
         sample_n = min(req.sample_n, len(df))
         df = df.sample(n=sample_n, random_state=42).reset_index(drop=True)
-        logger.info("Training on %d rows …", len(df))
+        logger.info("Training on %d rows with features: %s", len(df), feature_cols[:-1])
 
         predictor = TabularPredictor(
             label="duration",
@@ -247,6 +210,7 @@ def _train_task(req: TrainRequest):
             eval_metric="mae",
             path=req.model_path,
         )
+        
         predictor.fit(
             train_data=df,
             presets=["medium_quality_faster_train", "optimize_for_deployment"],
@@ -257,176 +221,79 @@ def _train_task(req: TrainRequest):
         _predictor                      = predictor
         MODEL_PATH                      = req.model_path
         _training_status["status"]      = "done"
-        _training_status["message"]     = (
-            f"Trained on {sample_n} rows. Model saved to {req.model_path}."
-        )
+        _training_status["message"]     = f"Success! Model saved to {req.model_path}."
         _training_status["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        logger.info("Training complete.")
 
     except Exception as exc:
         _training_status["status"]      = "error"
         _training_status["message"]     = str(exc)
         _training_status["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        logger.exception("Training failed: %s", exc)
+        logger.exception("Training failed.")
 
 
-# ─── Routes — health & training ───────────────────────────────────────────────
-@app.get("/health", summary="Health check")
+# ─── Routes ───────────────────────────────────────────────────────────────────
+@app.get("/health")
 def health():
-    """Return server status, model load state, and centroid CSV availability."""
-    model_loaded   = _predictor is not None
-    model_exists   = Path(MODEL_PATH).exists()
-    centroid_ready = _zones_df is not None or Path(CENTROID_CSV).exists()
     return {
-        "status":             "ok",
-        "model_loaded":       model_loaded,
-        "model_exists_on_disk": model_exists,
-        "model_path":         MODEL_PATH,
-        "centroid_csv_ready": centroid_ready,
-        "centroid_csv_path":  CENTROID_CSV,
+        "status": "ok",
+        "model_loaded": _predictor is not None,
+        "model_path": MODEL_PATH
     }
 
-
-@app.post("/train", summary="Start model training")
+@app.post("/train")
 def train(req: TrainRequest, background_tasks: BackgroundTasks):
-    """
-    Start AutoGluon training in the background.
-    Poll GET /train/status to check progress.
-    """
     if _training_status["status"] == "running":
-        raise HTTPException(status_code=409, detail="Training is already in progress.")
+        raise HTTPException(status_code=409, detail="Training in progress.")
     background_tasks.add_task(_train_task, req)
-    return {"message": "Training started in background.", "config": req.dict()}
+    return {"message": "Training started."}
 
-
-@app.get("/train/status", summary="Check training job status")
+@app.get("/train/status")
 def train_status():
-    """Returns current training status: idle | running | done | error."""
     return _training_status
 
-
-# ─── Routes — prediction ──────────────────────────────────────────────────────
-@app.post("/predict", response_model=PredictResponse, summary="Predict trip duration")
+@app.post("/predict", response_model=PredictResponse)
 def predict(req: PredictRequest):
-    """
-    Predict trip duration (minutes) for one or more trips.
-    Each result is enriched with the pickup and dropoff zone centroid
-    coordinates looked up from the centroid CSV.
-
-    Example single-trip payload:
-    {
-      "trips": [{
-        "pickup_datetime": "2025-03-01 08:30:00",
-        "trip_distance": 2.5,
-        "pu_location_id": 161,
-        "do_location_id": 236,
-        "fare_amount": 12.5,
-        "total_amount": 19.5
-      }]
-    }
-    """
     predictor = get_predictor()
-
+    
+    # Strip incoming JSON to only the 4 features the model knows
     rows = [build_feature_row(t) for t in req.trips]
-    df   = pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
     preds = predictor.predict(df).tolist()
 
-    # Attempt to load zone info — if CSV is missing, zones will be None
     try:
         get_zones_df()
         zones_available = True
-    except HTTPException:
+    except:
         zones_available = False
-        logger.warning("Centroid CSV not available — zone info omitted from response.")
 
     results = []
     for trip, duration in zip(req.trips, preds):
-        pickup_zone  = zone_record(trip.pu_location_id)  if zones_available else None
-        dropoff_zone = zone_record(trip.do_location_id)  if zones_available else None
+        p_zone = zone_record(trip.pu_location_id) if zones_available else None
+        d_zone = zone_record(trip.do_location_id) if zones_available else None
         results.append(TripPrediction(
-            predicted_duration_minutes=round(duration, 2),
-            pickup_zone=ZoneInfo(**pickup_zone)   if pickup_zone  else None,
-            dropoff_zone=ZoneInfo(**dropoff_zone) if dropoff_zone else None,
+            predicted_duration_minutes=max(0, round(duration, 2)),
+            pickup_zone=ZoneInfo(**p_zone) if p_zone else None,
+            dropoff_zone=ZoneInfo(**d_zone) if d_zone else None,
         ))
 
-    return PredictResponse(
-        results=results,
-        count=len(results),
-        model_path=MODEL_PATH,
-    )
+    return PredictResponse(results=results, count=len(results), model_path=MODEL_PATH)
 
-
-# ─── Routes — zones ───────────────────────────────────────────────────────────
-@app.get("/zones", response_model=List[ZoneInfo], summary="List all taxi zones")
-def list_zones(borough: Optional[str] = Query(None, description="Filter by borough name")):
-    """
-    Return all 263 NYC taxi zones with their centroid coordinates.
-    Optionally filter by borough (e.g. Manhattan, Brooklyn, Queens, Bronx, Staten Island, EWR).
-    """
+@app.get("/zones", response_model=List[ZoneInfo])
+def list_zones(borough: Optional[str] = None):
     df = get_zones_df().reset_index()
     if borough:
         df = df[df["borough"].str.lower() == borough.lower()]
-        if df.empty:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No zones found for borough '{borough}'.",
-            )
-    return [
-        ZoneInfo(
-            location_id=int(row["LocationID"]),
-            zone=row["zone"],
-            borough=row["borough"],
-            centroid_lon=float(row["centroid_lon"]),
-            centroid_lat=float(row["centroid_lat"]),
-        )
-        for _, row in df.iterrows()
-    ]
+    return [ZoneInfo(**row.to_dict()) for _, row in df.iterrows()]
 
-
-@app.get("/zones/nearby", response_model=List[NearbyZone], summary="Find nearest zones to a coordinate")
-def zones_nearby(
-    lat:     float = Query(..., description="Latitude of query point",  example=40.7580),
-    lon:     float = Query(..., description="Longitude of query point", example=-73.9855),
-    top_n:   int   = Query(5,   ge=1, le=50, description="Number of nearest zones to return"),
-):
-    """
-    Return the top_n taxi zones nearest to the given (lat, lon) coordinate,
-    sorted by great-circle distance (km).
-
-    Useful for matching a user's GPS location to a LocationID before calling /predict.
-    """
-    df = get_zones_df().reset_index()
-
-    df = df.copy()
-    df["distance_km"] = df.apply(
-        lambda r: haversine_km(lat, lon, r["centroid_lat"], r["centroid_lon"]),
-        axis=1,
-    )
+@app.get("/zones/nearby", response_model=List[NearbyZone])
+def zones_nearby(lat: float, lon: float, top_n: int = 5):
+    df = get_zones_df().reset_index().copy()
+    df["distance_km"] = df.apply(lambda r: haversine_km(lat, lon, r["centroid_lat"], r["centroid_lon"]), axis=1)
     nearest = df.nsmallest(top_n, "distance_km")
+    return [NearbyZone(**row.to_dict()) for _, row in nearest.iterrows()]
 
-    return [
-        NearbyZone(
-            location_id=int(row["LocationID"]),
-            zone=row["zone"],
-            borough=row["borough"],
-            centroid_lon=float(row["centroid_lon"]),
-            centroid_lat=float(row["centroid_lat"]),
-            distance_km=round(float(row["distance_km"]), 4),
-        )
-        for _, row in nearest.iterrows()
-    ]
-
-
-@app.get("/zones/{location_id}", response_model=ZoneInfo, summary="Look up a zone by LocationID")
+@app.get("/zones/{location_id}", response_model=ZoneInfo)
 def get_zone(location_id: int):
-    """
-    Return zone name, borough, and centroid coordinates for a single LocationID.
-    LocationID matches the PULocationID / DOLocationID columns in the taxi trip data.
-    """
     record = zone_record(location_id)
-    if record is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"LocationID {location_id} not found in centroid CSV.",
-        )
+    if not record: raise HTTPException(status_code=404)
     return ZoneInfo(**record)
