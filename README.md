@@ -35,13 +35,58 @@ uvicorn main:app --reload --port 8000
 API docs auto-generated at → http://127.0.0.1:8000/docs
 
 ---
+## Running the Server
+
+### Step 1 — Project structure
+Make sure `main.py` is in the same folder as your `AutogluonModels/` directory:
+```
+project-root/
+├── main.py
+├── AutogluonModels/
+│   └── yellow_duration_quick/
+└── data/
+    └── concate_data/
+        └── yellow_tripdata_2025_all.parquet
+```
+
+### Step 2 — Start the server
+```bash
+conda activate autogluon-win
+uvicorn main:app --reload --port 8000
+```
+
+You should see output like:
+```
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process
+```
+
+### Step 3 — Verify the server is running
+Open your browser and go to:
+- **Interactive API docs (Swagger UI):** http://127.0.0.1:8000/docs
+- **Health check:** http://127.0.0.1:8000/health
+
+Expected health response:
+```json
+{ "status": "ok", "model_loaded": false }
+```
+---
 
 ## Endpoints
 
-### GET `/health`
-Check if the server is up and whether a model is loaded.
+## API Endpoints Summary
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Check if server and model are running |
+| POST | `/train` | Kick off AutoGluon training in the background |
+| GET | `/train/status` | Poll training progress (`idle` → `running` → `done` / `error`) |
+| POST | `/predict` | Predict trip duration (in minutes) for one or more trips |
+| GET | `/model/info` | Returns leaderboard, best model, eval metric, and feature importances |
 
 ---
+
+<!-- ---
 
 ### POST `/train`
 Kick off AutoGluon training in the background.
@@ -102,7 +147,7 @@ Response:
 ---
 
 ### GET `/model/info`
-Returns leaderboard, best model name, eval metric, and feature importances.
+Returns leaderboard, best model name, eval metric, and feature importances. -->
 
 ---
 
