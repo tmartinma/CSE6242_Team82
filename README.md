@@ -86,95 +86,143 @@ Expected health response:
 
 ---
 
-<!-- ---
+## Testing the API
 
-### POST `/train`
-Kick off AutoGluon training in the background.
+### Option A — Swagger UI (Recommended for quick testing)
+1. Navigate to http://127.0.0.1:8000/docs
+2. Click any endpoint → **"Try it out"** → fill in parameters → **"Execute"**
 
-```json
-{
-  "data_path": "data/concate_data/yellow_tripdata_2025_all.parquet",
-  "sample_n": 200000,
-  "time_limit": 300,
-  "model_path": "AutogluonModels/yellow_duration_quick"
-}
+### Option B — cURL
+
+**Health check:**
+```bash
+curl http://localhost:8000/health
 ```
 
-Poll `GET /train/status` to check progress (`idle` → `running` → `done` / `error`).
+**Trigger training (Yellow Taxi):**
+```bash
+curl -X POST http://localhost:8000/train \
+  -H "Content-Type: application/json" \
+  -d '{
+    "taxi_type": "yellow",
+    "data_path": "data/concate_data/yellow_tripdata_2025_all.parquet",
+    "sample_n": 200000,
+    "time_limit": 300,
+    "model_path": "AutogluonModels/yellow_fare_model"
+  }'
+```
 
----
+**Trigger training (Green Taxi):**
+```bash
+curl -X POST http://localhost:8000/train \
+  -H "Content-Type: application/json" \
+  -d '{
+    "taxi_type": "green",
+    "data_path": "data/concate_data/green_tripdata_2025_all.parquet",
+    "sample_n": 200000,
+    "time_limit": 300,
+    "model_path": "AutogluonModels/green_fare_model"
+  }'
+```
 
-### POST `/predict`
-Predict trip duration (minutes) for one or more trips.
+**Check training status:**
+```bash
+curl http://localhost:8000/train/status
+```
 
-```json
-{
-  "trips": [
-    {
+**Predict distance and fare (Yellow Taxi):**
+```bash
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "taxi_type": "yellow",
+    "trips": [{
       "pickup_datetime": "2025-03-01 08:30:00",
       "vendor_id": 1,
       "passenger_count": 1.0,
-      "trip_distance": 2.5,
       "ratecode_id": 1.0,
       "pu_location_id": 161,
       "do_location_id": 236,
       "payment_type": 1,
-      "fare_amount": 12.5,
       "extra": 3.5,
       "mta_tax": 0.5,
       "tip_amount": 2.0,
       "tolls_amount": 0.0,
       "improvement_surcharge": 1.0,
-      "total_amount": 19.5,
       "congestion_surcharge": 2.5,
       "airport_fee": 0.0,
       "cbd_congestion_fee": 0.0
-    }
-  ]
-}
+    }]
+  }'
 ```
 
-Response:
+**Predict distance and fare (Green Taxi):**
+```bash
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "taxi_type": "green",
+    "trips": [{
+      "pickup_datetime": "2025-03-01 08:30:00",
+      "vendor_id": 2,
+      "passenger_count": 1.0,
+      "ratecode_id": 1.0,
+      "pu_location_id": 74,
+      "do_location_id": 75,
+      "payment_type": 1,
+      "extra": 0.5,
+      "mta_tax": 0.5,
+      "tip_amount": 1.5,
+      "tolls_amount": 0.0,
+      "improvement_surcharge": 1.0,
+      "congestion_surcharge": 2.5
+    }]
+  }'
+```
+
+Expected prediction response:
 ```json
 {
-  "predictions": [14.32],
+  "taxi_type": "yellow",
+  "predictions": [
+    {
+      "trip_distance": 2.53,
+      "fare_amount": 12.80
+    }
+  ],
   "count": 1,
-  "unit": "minutes",
-  "model_path": "AutogluonModels/yellow_duration_quick"
+  "units": {
+    "trip_distance": "miles",
+    "fare_amount": "USD"
+  },
+  "model_path": "AutogluonModels/yellow_fare_model"
 }
 ```
 
----
-
-### GET `/model/info`
-Returns leaderboard, best model name, eval metric, and feature importances. -->
-
----
-
-## Calling from your UI (JavaScript)
-
+### Option C — JavaScript (for UI integration)
 ```js
 // Health check
 const health = await fetch("http://localhost:8000/health").then(r => r.json());
 
-// Predict
+// Predict distance and fare — set taxi_type to "yellow" or "green"
 const res = await fetch("http://localhost:8000/predict", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
+    taxi_type: "yellow",
     trips: [{
       pickup_datetime: "2025-03-01 08:30:00",
-      trip_distance: 2.5,
       pu_location_id: 161,
       do_location_id: 236,
-      fare_amount: 12.5,
-      total_amount: 19.5,
-      // other fields use defaults if omitted
+      passenger_count: 1.0,
+      payment_type: 1
+      // other fields will use defaults if omitted
     }]
   })
 });
 const { predictions } = await res.json();
-console.log(`Predicted duration: ${predictions[0].toFixed(1)} minutes`);
+console.log(`Predicted distance: ${predictions[0].trip_distance.toFixed(2)} miles`);
+console.log(`Predicted fare: $${predictions[0].fare_amount.toFixed(2)}`);
 ```
 
 ---
