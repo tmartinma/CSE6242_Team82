@@ -1,5 +1,45 @@
 # CSE6242_Team82
 Spring 2026 Gatech CSE6242 Group Project
+Spring 2026 | Georgia Tech CSE6242 Group Project
+
+This project predicts **trip distance** and **fare price** for NYC **Yellow Taxi** and **Green Taxi** trips using AutoGluon AutoML, paired with an interactive map visualization dashboard.
+
+---
+
+## Background
+
+Transportation is an important part of daily life for millions of people. In a dense, fast-paced city like New York City, getting around can be challenging. Public transportation and private cars share the same streets, which often leads to heavy traffic affecting residents, commuters, and visitors. Even though subways and ride-sharing services have grown in recent years, the city's well-known taxi fleet — including yellow and green cabs — remains a critical part of daily transportation, with thousands of taxis traveling through the five boroughs every day.
+
+In a city where time matters, traffic can make a short trip take much longer than expected. This project addresses this problem by building a system that predicts taxi trip fare and distance, and visualizes mobility patterns across the city. By turning large amounts of taxi data into clear predictions and visual insights, the project helps people better understand travel patterns and supports more informed decisions for both city planners and passengers.
+
+---
+
+## Problem Statement
+
+In New York City, taxi fare and trip distance can vary significantly depending on location, time, and traffic conditions. A trip that looks short on the map may still cost more or cover a different distance than expected due to congestion or differences between areas of the city. This makes it difficult for passengers to anticipate costs and distances, and also makes it harder to understand overall travel patterns from raw taxi records.
+
+We define the problem as **predicting taxi trip distance and fare price** based on historical yellow and green taxi trip data. The model uses features such as pickup time, pickup location, and drop-off location to estimate these values. Beyond just outputting numbers, our goal is to combine prediction with an interactive map interface so users can visually explore trip estimates and better understand mobility patterns across New York City.
+
+---
+
+## Method
+
+### Data
+We use 2025 NYC TLC taxi trip data, aggregating 11 months of yellow and green taxi records — over **44 million trips** in total. We perform geospatial mapping using GeoPandas and TLC taxi zone files to convert pickup and dropoff LocationIDs into latitude/longitude centroids. Extreme outliers are removed by keeping only trips with durations between 0 and 70 minutes. A memory-optimized SQLite pipeline is used to handle large-scale data joins without system failures.
+
+### AutoML Modeling
+Instead of a single hand-tuned model, we use **AutoGluon TabularPredictor** to automate model selection, training, and optimization on a sampled dataset of 200,000 cleaned records with an 80/20 train-test split. AutoGluon evaluates multiple model types — including LightGBM, XGBoost, CatBoost, Random Forest, and neural networks — and combines them into a weighted ensemble. This approach achieves an **MAE of ~1.88 minutes**, outperforming standalone models like XGBoost (MAE ~1.96 minutes).
+
+### System Architecture
+The system is built in three layers:
+1. **Data pipeline** — memory-efficient SQLite setup with geospatial mapping via GeoPandas
+2. **Modeling** — AutoGluon AutoML with automatic feature selection and model ensembling
+3. **Backend API** — FastAPI serving real-time predictions with nearest taxi zone lookups, connected to an interactive frontend dashboard ("TaxiPredict.ai")
+
+### Visualization
+An interactive NYC map interface allows users to select pickup and dropoff locations and instantly receive fare and distance predictions from the model. Planned additions include spatial heatmaps, prediction error visualization, and temporal filtering.
+
+---
 
 Data Links:
 https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page <br>
