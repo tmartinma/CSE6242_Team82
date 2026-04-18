@@ -41,7 +41,7 @@ An interactive NYC map interface allows users to select pickup and dropoff locat
 
 ---
 
-Data Links:
+## Data Sources
 https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page <br>
 Prosessed data URL through shared drive in parquet format: <br>
 
