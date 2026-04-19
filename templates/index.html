@@ -3,203 +3,303 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TaxiPredict AI | Dashboard</title>
-
+    <title>NYC Taxi ML Route Predictor</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        :root {
-            --primary: #4f46e5; /* Indigo */
-            --accent: #f43f5e;  /* Rose */
-            --bg: #f8fafc;
-            --text-main: #0f172a;
-            --text-muted: #64748b;
-            --success: #10b981;
+        #map { height: 100%; width: 100%; z-index: 1; }
+        .sidebar-scroll::-webkit-scrollbar { width: 4px; }
+        .sidebar-scroll::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
+        .animate-result { animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 
-        * { box-sizing: border-box; }
-        body, html {
-            margin: 0; padding: 0; height: 100%;
-            font-family: 'Inter', sans-serif;
-            background: var(--bg);
-            overflow: hidden;
+        .premium-card {
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
-
-        .container { display: flex; height: 100vh; width: 100vw; }
-
-        /* Floating Sidebar */
-        .sidebar {
-            position: absolute; top: 20px; left: 20px; width: 340px; bottom: 20px;
-            background: white; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-            padding: 32px; z-index: 1000; display: flex; flex-direction: column;
-            border: 1px solid #e2e8f0;
-        }
-
-        .logo { font-size: 1.4rem; font-weight: 800; color: var(--primary); margin-bottom: 8px; letter-spacing: -0.05em; }
-        .subtitle { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 30px; }
-
-        /* Status Indicators */
-        .status-bar { display: flex; gap: 10px; margin-bottom: 24px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
-        .status-dot { height: 8px; width: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; background: #cbd5e1; }
-        .online { background: var(--success); box-shadow: 0 0 8px var(--success); }
-
-        .point-box {
-            padding: 16px; border-radius: 12px; background: var(--bg);
-            border: 1px dashed #cbd5e1; margin-bottom: 16px; transition: 0.3s;
-            font-size: 0.85rem; color: var(--text-muted);
-        }
-        .point-box.active-pu { border-color: var(--primary); background: #f5f3ff; color: var(--primary); border-style: solid; }
-        .point-box.active-do { border-color: var(--accent); background: #fff1f2; color: var(--accent); border-style: solid; }
-
-        button.btn-main {
-            width: 100%; background: var(--primary); color: white; border: none;
-            padding: 16px; border-radius: 12px; font-weight: 600; cursor: pointer;
-            transition: 0.2s; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
-            margin-top: 10px;
-        }
-        button.btn-main:hover { background: #4338ca; transform: translateY(-1px); }
-        button.btn-main:disabled { background: #94a3b8; cursor: not-allowed; box-shadow: none; }
-
-        /* Prediction Result Section */
-        #prediction-view {
-            margin-top: 32px; border-top: 1px solid #f1f5f9; padding-top: 32px;
-            display: none; animation: fadeIn 0.4s ease-out;
-        }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-        .eta-label { font-size: 0.7rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
-        .eta-large { font-size: 3.5rem; font-weight: 800; color: var(--text-main); line-height: 1; margin: 8px 0; }
-        .route-info { font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; }
-        .route-info b { color: var(--text-main); }
-
-        #map { flex-grow: 1; height: 100%; z-index: 1; }
     </style>
 </head>
-<body>
+<body class="bg-slate-50 text-slate-900 overflow-hidden font-sans">
+    <div id="root"></div>
 
-<div class="container">
-    <div class="sidebar">
-        <div class="logo">TaxiPredict.ai</div>
-        <div class="subtitle">Real-time NYC Trip Estimator</div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
 
-        <div class="status-bar">
-            <span><span class="status-dot online"></span> Web Server</span>
-            <span><span class="status-dot online" id="engine-dot"></span> ML Engine</span>
-        </div>
+        const API_BASE = "http://127.0.0.1:8000";
+        const OSRM_API = "https://router.project-osrm.org/route/v1/driving/";
 
-        <div class="point-box" id="pu_label">1. Set Pickup on Map</div>
-        <div class="point-box" id="do_label">2. Set Destination on Map</div>
+        const createIcon = (color) => new L.Icon({
+            iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${color}.png`,
+            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+            iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+        });
 
-        <button class="btn-main" id="predict-btn" onclick="getAIResult()">Generate Estimate</button>
-        <button onclick="location.reload()" style="background:none; border:none; color:#64748b; font-size:0.7rem; margin-top:20px; cursor:pointer; text-decoration:underline; width:100%;">Reset Map</button>
+        const App = () => {
+            const [pickup, setPickup] = useState(null);
+            const [dropoff, setDropoff] = useState(null);
+            const [zones, setZones] = useState({ pu: null, do: null });
+            const [prediction, setPrediction] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [showRoute, setShowRoute] = useState(false);
 
-        <div id="prediction-view">
-            <div class="eta-label">AI Estimated Duration</div>
-            <div class="eta-large"><span id="eta_val">0</span><small style="font-size: 1.2rem; font-weight: 400; margin-left: 5px;">min</small></div>
-            <div class="route-info" id="route_val"></div>
-        </div>
-    </div>
+            const mapRef = useRef(null);
+            const routeLayerRef = useRef(null);
+            const pickupMarkerRef = useRef(null);
+            const dropoffMarkerRef = useRef(null);
 
-    <div id="map"></div>
-</div>
+            // Initialize Map
+            useEffect(() => {
+                if (!mapRef.current) {
+                    mapRef.current = L.map('map', { zoomControl: false }).setView([40.7128, -74.0060], 12);
+                    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                        attribution: '&copy; OpenStreetMap &copy; CARTO'
+                    }).addTo(mapRef.current);
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                    L.control.zoom({ position: 'bottomright' }).addTo(mapRef.current);
 
-<script>
-    // 1. Map Initialization
-    const map = L.map('map', { zoomControl: false }).setView([40.7128, -74.0060], 13);
+                    setTimeout(() => mapRef.current.invalidateSize(), 500);
+                }
+            }, []);
 
-    // Clean, modern light-themed tiles
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; CARTO'
-    }).addTo(map);
+            // Handle Map Click
+            useEffect(() => {
+                if (!mapRef.current) return;
 
-    let pickup, dropoff, routeLine, markers = [];
+                const onMapClick = (e) => {
+                    const latlng = e.latlng;
+                    if (!pickup || (pickup && dropoff)) {
+                        // Reset everything for a fresh pick
+                        handleReset();
+                        setPickup(latlng);
+                        fetchZoneData(latlng, 'pu');
+                    } else {
+                        // Set the destination
+                        setDropoff(latlng);
+                        fetchZoneData(latlng, 'do');
+                        fetchRouteGeometry(pickup, latlng);
+                    }
+                };
 
-    // 2. Handle Clicks
-    map.on('click', (e) => {
-        if (!pickup) {
-            pickup = e.latlng;
-            addMarker(pickup, 'var(--primary)');
-            const puBox = document.getElementById('pu_label');
-            puBox.innerText = "Pickup Point Locked";
-            puBox.classList.add('active-pu');
-        } else if (!dropoff) {
-            dropoff = e.latlng;
-            addMarker(dropoff, 'var(--accent)');
-            const doBox = document.getElementById('do_label');
-            doBox.innerText = "Destination Point Locked";
-            doBox.classList.add('active-do');
+                mapRef.current.on('click', onMapClick);
+                return () => mapRef.current.off('click', onMapClick);
+            }, [pickup, dropoff]);
 
-            // Draw route line
-            routeLine = L.polyline([pickup, dropoff], {
-                color: 'var(--primary)',
-                weight: 4,
-                dashArray: '10, 10',
-                opacity: 0.6
-            }).addTo(map);
+            const clearMapItems = () => {
+                if (routeLayerRef.current) mapRef.current.removeLayer(routeLayerRef.current);
+                if (pickupMarkerRef.current) mapRef.current.removeLayer(pickupMarkerRef.current);
+                if (dropoffMarkerRef.current) mapRef.current.removeLayer(dropoffMarkerRef.current);
+            };
 
-            map.fitBounds(routeLine.getBounds(), { padding: [100, 100] });
-            getAIResult();
-        }
-    });
+            const handleReset = () => {
+                clearMapItems();
+                setPickup(null);
+                setDropoff(null);
+                setZones({ pu: null, do: null });
+                setPrediction(null);
+                setShowRoute(false);
+                mapRef.current.setView([40.7128, -74.0060], 12);
+            };
 
-    function addMarker(ll, color) {
-        const m = L.circleMarker(ll, {
-            radius: 8,
-            fillColor: color,
-            color: '#fff',
-            weight: 3,
-            fillOpacity: 1
-        }).addTo(map);
-        markers.push(m);
-    }
+            const fetchZoneData = async (ll, type) => {
+                try {
+                    const res = await fetch(`${API_BASE}/zones/nearby?lat=${ll.lat}&lon=${ll.lng}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        setZones(prev => ({ ...prev, [type]: data[0] }));
+                    }
+                } catch (e) { console.error("API error", e); }
+            };
 
-    // 3. Inference Logic
-    async function getAIResult() {
-        if (!pickup || !dropoff) return;
+            const fetchRouteGeometry = async (start, end) => {
+                try {
+                    const res = await fetch(`${OSRM_API}${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`);
+                    const data = await res.json();
+                    if (data.code === 'Ok') {
+                        const coords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+                        if (routeLayerRef.current) mapRef.current.removeLayer(routeLayerRef.current);
 
-        // Visual feedback
-        const btn = document.getElementById('predict-btn');
-        const resultView = document.getElementById('prediction-view');
-        btn.disabled = true;
-        btn.innerText = "Processing...";
-        resultView.style.display = 'block';
-        document.getElementById('eta_val').innerText = "--";
+                        routeLayerRef.current = L.polyline(coords, {
+                            color: '#10b981',
+                            weight: 7,
+                            opacity: 0, // Hidden until calculation
+                            lineJoin: 'round'
+                        }).addTo(mapRef.current);
 
-        // Calculate distance for the model
-        const distanceMiles = (map.distance(pickup, dropoff) / 1609.34).toFixed(2);
+                        mapRef.current.fitBounds(L.latLngBounds([start, end]), { padding: [80, 80] });
+                    }
+                } catch (e) { console.error("Route error", e); }
+            };
 
-        try {
-            const response = await fetch('/predict', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    start_lat: pickup.lat,
-                    start_lng: pickup.lng,
-                    end_lat: dropoff.lat,
-                    end_lng: dropoff.lng,
-                    distance: distanceMiles
-                })
-            });
+            // Sync Markers
+            useEffect(() => {
+                if (!mapRef.current) return;
+                if (pickup) {
+                    if (pickupMarkerRef.current) mapRef.current.removeLayer(pickupMarkerRef.current);
+                    pickupMarkerRef.current = L.marker([pickup.lat, pickup.lng], { icon: createIcon('green') }).addTo(mapRef.current);
+                }
+                if (dropoff) {
+                    if (dropoffMarkerRef.current) mapRef.current.removeLayer(dropoffMarkerRef.current);
+                    dropoffMarkerRef.current = L.marker([dropoff.lat, dropoff.lng], { icon: createIcon('red') }).addTo(mapRef.current);
+                }
+            }, [pickup, dropoff]);
 
-            const data = await response.json();
+            const handlePredict = async () => {
+                if (!pickup || !dropoff) return;
+                setLoading(true);
+                try {
+                    const distMiles = L.latLng(pickup).distanceTo(L.latLng(dropoff)) / 1609.34;
+                    const res = await fetch(`${API_BASE}/predict`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            trips: [{
+                                trip_distance: distMiles,
+                                pu_location_id: zones.pu.LocationID,
+                                do_location_id: zones.do.LocationID
+                            }]
+                        })
+                    });
+                    const data = await res.json();
+                    setPrediction(data.results[0]);
 
-            if (data.eta) {
-                document.getElementById('eta_val').innerText = Math.round(data.eta);
-                document.getElementById('route_val').innerHTML = `<b>Route:</b> ${data.pickup} <br>to ${data.dropoff}`;
-            } else if (data.error) {
-                document.getElementById('route_val').innerText = "Error: " + data.error;
-            }
-        } catch (err) {
-            document.getElementById('route_val').innerText = "Failed to connect to server.";
-        } finally {
-            btn.disabled = false;
-            btn.innerText = "Generate Estimate";
-        }
-    }
-</script>
+                    // Show Route Line
+                    setShowRoute(true);
+                    if (routeLayerRef.current) routeLayerRef.current.setStyle({ opacity: 0.8 });
+                } catch (err) {
+                    alert("Predictor Error: Ensure local_api.py is running!");
+                } finally {
+                    setLoading(false);
+                }
+            };
 
+            return (
+                <div className="flex h-screen w-full bg-white overflow-hidden">
+                    {/* Sidebar */}
+                    <aside className="w-96 flex flex-col bg-white border-r shadow-2xl z-[1000]">
+                        <div className="p-6 bg-slate-900 text-white flex items-center gap-4">
+                            <div className="p-2.5 bg-yellow-400 rounded-xl shadow-lg shadow-yellow-400/20 text-slate-900">
+                                <i data-lucide="navigation"></i>
+                            </div>
+                            <div>
+                                <h1 className="text-xl font-bold tracking-tight">NYC Taxi Predictor</h1>
+                                <p className="text-[10px] uppercase tracking-widest text-yellow-400 font-black">Dual ML Engine</p>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto sidebar-scroll p-6 space-y-8">
+                            {/* Trip Selection Area */}
+                            <div className="space-y-4">
+                                <div className={`p-5 rounded-2xl border-2 transition-all duration-300 ${pickup ? 'border-emerald-500 bg-emerald-50/40' : 'bg-slate-50 border-slate-100'}`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <i data-lucide="map-pin" className={`w-4 h-4 ${pickup ? 'text-emerald-500' : 'text-slate-400'}`}></i>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Pickup Point</p>
+                                    </div>
+                                    <p className="text-sm font-bold text-slate-700 truncate">{zones.pu ? zones.pu.zone : (pickup ? "Identifying..." : "Click map to set point")}</p>
+                                    {zones.pu && <span className="text-[9px] mt-2 inline-block font-black text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-md uppercase tracking-widest">{zones.pu.borough}</span>}
+                                </div>
+
+                                <div className={`p-5 rounded-2xl border-2 transition-all duration-300 ${dropoff ? 'border-rose-500 bg-rose-50/40' : 'bg-slate-50 border-slate-100'}`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <i data-lucide="map-pin" className={`w-4 h-4 ${dropoff ? 'text-rose-500' : 'text-slate-400'}`}></i>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Dropoff Point</p>
+                                    </div>
+                                    <p className="text-sm font-bold text-slate-700 truncate">{zones.do ? zones.do.zone : (pickup ? (dropoff ? "Identifying..." : "Select destination point") : "---")}</p>
+                                    {zones.do && <span className="text-[9px] mt-2 inline-block font-black text-rose-600 bg-rose-100 px-2 py-0.5 rounded-md uppercase tracking-widest">{zones.do.borough}</span>}
+                                </div>
+                            </div>
+
+                            <button
+                                disabled={!dropoff || loading}
+                                onClick={handlePredict}
+                                className="w-full py-5 bg-yellow-400 text-slate-900 rounded-2xl font-black text-xs shadow-xl shadow-yellow-400/20 disabled:opacity-50 active:scale-[0.98] transition-all flex items-center justify-center gap-3 uppercase tracking-widest"
+                            >
+                                {loading ? <i data-lucide="loader-2" className="w-5 h-5 animate-spin"></i> : <i data-lucide="zap" className="w-4 h-4"></i>}
+                                {loading ? "Analyzing..." : "Calculate Trip Estimate"}
+                            </button>
+
+                            {/* Prediction Cards */}
+                            {prediction && (
+                                <div className="space-y-5 animate-result pb-4">
+                                    <div className="group relative p-6 bg-gradient-to-br from-slate-800 to-slate-950 rounded-[2.5rem] border border-white/10 shadow-2xl overflow-hidden premium-card">
+                                        <div className="absolute top-0 right-0 p-4 text-white/5 pointer-events-none group-hover:text-white/10 transition-colors">
+                                            <i data-lucide="clock-4" className="w-36 h-36 -mr-8 -mt-8"></i>
+                                        </div>
+                                        <div className="relative z-10 text-white">
+                                            <div className="flex items-center gap-2 mb-4">
+                                                <div className="h-1.5 w-1.5 rounded-full bg-yellow-400"></div>
+                                                <p className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Estimated Time</p>
+                                            </div>
+                                            <div className="flex items-baseline gap-2">
+                                                <span className="text-6xl font-black tracking-tighter">{prediction.predicted_duration_minutes}</span>
+                                                <span className="text-lg font-bold text-slate-500 italic">mins</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="group relative p-6 bg-gradient-to-br from-emerald-600 to-teal-800 rounded-[2.5rem] border border-white/20 shadow-2xl overflow-hidden premium-card">
+                                        <div className="absolute top-0 right-0 p-4 text-white/10 pointer-events-none group-hover:text-white/20 transition-colors">
+                                            <i data-lucide="banknote" className="w-36 h-36 -mr-8 -mt-8"></i>
+                                        </div>
+                                        <div className="relative z-10 text-white">
+                                            <div className="flex items-center gap-2 mb-4">
+                                                <div className="h-1.5 w-1.5 rounded-full bg-white"></div>
+                                                <p className="text-[10px] font-black uppercase text-emerald-100 tracking-[0.2em]">Ride Estimate</p>
+                                            </div>
+                                            <div className="flex items-baseline gap-1">
+                                                <span className="text-2xl font-black text-emerald-200">$</span>
+                                                <span className="text-6xl font-black tracking-tighter">{prediction.predicted_fare_amount}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t bg-slate-50">
+                            <button
+                                onClick={handleReset}
+                                className="flex items-center justify-center gap-2 w-full py-2.5 text-[10px] font-black text-slate-400 hover:text-rose-500 uppercase tracking-widest transition-colors"
+                            >
+                                <i data-lucide="rotate-ccw" className="w-3.5 h-3.5"></i>
+                                Reset Map & Route
+                            </button>
+                        </div>
+                    </aside>
+
+                    <main className="flex-1 relative bg-slate-200">
+                        <div id="map"></div>
+                        {!pickup && (
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[1001] pointer-events-none">
+                                <div className="bg-white/95 backdrop-blur-md px-10 py-6 rounded-[2.5rem] shadow-2xl border border-white/50 flex items-center gap-5 animate-bounce">
+                                    <div className="bg-yellow-400 p-3 rounded-2xl shadow-lg shadow-yellow-400/30 text-slate-900">
+                                        <i data-lucide="mouse-pointer-2" className="w-7 h-7"></i>
+                                    </div>
+                                    <p className="font-black text-slate-900 text-lg">Set Pickup Location</p>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+
+        setTimeout(() => { if (window.lucide) window.lucide.createIcons(); }, 1000);
+    </script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </body>
 </html>

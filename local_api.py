@@ -1,36 +1,63 @@
-"""
-NYC Taxi AutoGluon API
-Endpoints:
-  POST /train              - Train the AutoGluon model
-  POST /predict            - Predict trip duration; response includes pickup/dropoff centroid coords
-  GET  /model/info         - Get model leaderboard & metrics
-  GET  /health             - Health check
-  GET  /zones              - List all taxi zones with centroid coordinates
-  GET  /zones/{location_id}- Look up a single zone by LocationID
-  GET  /zones/nearby       - Find the nearest zone to a given lat/lon
-"""
-
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import Optional, List
-import pandas as pd
-import numpy as np
-from pathlib import Path
 import logging
-import time
 import math
+import os
+import sys
+from pathlib import Path
+from typing import List, Optional
+
+
+# --- PRIORITY: ENVIRONMENT STABILITY PATCHES ---
+# These patches resolve common Python 3.12 metadata and pycparser errors
+# that can occur when loading AutoGluon models on modern macOS/Windows systems.
+def apply_stability_patches():
+    # 1. Mock pycparser if missing or broken (common on macOS/3.12)
+    try:
+        import pycparser
+
+        if not hasattr(pycparser, "__version__"):
+            pycparser.__version__ = "2.21"
+    except Exception:
+        pass
+
+    # 2. Patch AutoGluon's version checker to prevent NoneType attribute errors
+    def patched_get_package_versions():
+        import importlib.metadata
+
+        package_version_dict = {}
+        for dist in importlib.metadata.distributions():
+            try:
+                name = dist.metadata.get("Name") or dist.metadata.get("name")
+                if name:
+                    package_version_dict[name.lower()] = dist.version
+            except Exception:
+                continue
+        return package_version_dict
+
+    try:
+        import autogluon.common.utils.utils as ag_utils
+
+        ag_utils.get_package_versions = patched_get_package_versions
+        import autogluon.core.utils.utils as ag_core_utils
+
+        ag_core_utils.get_package_versions = patched_get_package_versions
+    except Exception:
+        pass
+
+
+# Apply patches before importing AutoGluon
+apply_stability_patches()
+
+import pandas as pd
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="NYC Taxi AutoML API",
-    description="AutoGluon-based trip duration prediction for NYC Yellow Taxi",
-    version="1.1.0",
-)
+app = FastAPI(title="NYC Taxi Dual-ML API")
 
-# Allow all origins for local UI dev
+# Enable CORS for the Leaflet/React frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,262 +65,166 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Global state ─────────────────────────────────────────────────────────────
-MODEL_PATH   = "AutogluonModels/taxi_duration_quick"
+# --- Path Configuration ---
+# Update these paths if your folders are named differently (e.g., taxi_fare_quick vs taxi_fair_quick)
+MODEL_PATH_DURATION = "AutogluonModels/taxi_duration_quick"
+MODEL_PATH_FARE = "AutogluonModels/taxi_fare_quick"
 CENTROID_CSV = "data/taxi_zone_centroids.csv"
 
-_predictor       = None   
-_zones_df        = None   
-_training_status = {
-    "status":      "idle",
-    "message":     "",
-    "started_at":  None,
-    "finished_at": None,
-}
+# --- Global Predictors ---
+_predictor_duration = None
+_predictor_fare = None
+_zones_df = None
 
 
-# ─── Zone helpers ──────────────────────────────────────────────────────────────
-def get_zones_df() -> pd.DataFrame:
+def get_duration_predictor():
+    global _predictor_duration
+    if _predictor_duration is None:
+        from autogluon.tabular import TabularPredictor
+
+        logger.info(f"Loading Duration Model from {MODEL_PATH_DURATION}...")
+        _predictor_duration = TabularPredictor.load(
+            MODEL_PATH_DURATION,
+            require_version_match=False,
+            require_py_version_match=False,
+            verbosity=0,
+        )
+    return _predictor_duration
+
+
+def get_fare_predictor():
+    global _predictor_fare
+    if _predictor_fare is None:
+        from autogluon.tabular import TabularPredictor
+
+        logger.info(f"Loading Fare Model from {MODEL_PATH_FARE}...")
+        _predictor_fare = TabularPredictor.load(
+            MODEL_PATH_FARE,
+            require_version_match=False,
+            require_py_version_match=False,
+            verbosity=0,
+        )
+    return _predictor_fare
+
+
+def get_zones_df():
     global _zones_df
     if _zones_df is None:
-        path = Path(CENTROID_CSV)
-        if not path.exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"Centroid CSV not found at '{CENTROID_CSV}'.",
+        if Path(CENTROID_CSV).exists():
+            _zones_df = pd.read_csv(CENTROID_CSV).set_index("LocationID")
+        else:
+            logger.warning(
+                f"File {CENTROID_CSV} not found. Zone names will be unavailable."
             )
-        _zones_df = pd.read_csv(path).set_index("LocationID")
     return _zones_df
 
 
-def zone_record(location_id: int) -> Optional[dict]:
-    df = get_zones_df()
-    if location_id not in df.index:
-        return None
-    row = df.loc[location_id]
-    return {
-        "location_id":   int(location_id),
-        "zone":          row["zone"],
-        "borough":       row["borough"],
-        "centroid_lon":  float(row["centroid_lon"]),
-        "centroid_lat":  float(row["centroid_lat"]),
-    }
-
-
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2
-         + math.cos(math.radians(lat1))
-         * math.cos(math.radians(lat2))
-         * math.sin(dlon / 2) ** 2)
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-
-# ─── AutoGluon helpers ────────────────────────────────────────────────────────
-def get_predictor():
-    global _predictor
-    if _predictor is None:
-        from autogluon.tabular import TabularPredictor
-        path = Path(MODEL_PATH)
-        if not path.exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"No trained model found at '{MODEL_PATH}'. Call POST /train first.",
-            )
-        _predictor = TabularPredictor.load(str(path), require_version_match=False)
-    return _predictor
-
-def build_feature_row(trip: "TripInput") -> dict:
-    """
-    Matches the 4 features used in AutoML.ipynb exactly.
-    Using VendorID or total_amount here would cause a model mismatch error.
-    """
-    return {
-        "fare_amount":   trip.fare_amount,
-        "PULocationID":  trip.pu_location_id,
-        "DOLocationID":  trip.do_location_id,
-        "trip_distance": trip.trip_distance,
-    }
-
-
-# ─── Pydantic schemas ──────────────────────────────────────────────────────────
+# --- Pydantic Models ---
 class TripInput(BaseModel):
-    pickup_datetime:       str
-    trip_distance:         float
-    pu_location_id:        int
-    do_location_id:        int
-    fare_amount:           float
-    # These fields are included for compatibility with the Web Server proxy
-    vendor_id:             Optional[int]   = 1
-    passenger_count:       Optional[float] = 1.0
-    total_amount:          Optional[float] = None
-    congestion_surcharge:  Optional[float] = 2.5
-
-
-class ZoneInfo(BaseModel):
-    location_id:  int
-    zone:         str
-    borough:      str
-    centroid_lon: float
-    centroid_lat: float
-
-
-class TripPrediction(BaseModel):
-    predicted_duration_minutes: float
-    pickup_zone:                Optional[ZoneInfo]
-    dropoff_zone:               Optional[ZoneInfo]
+    trip_distance: float
+    pu_location_id: int
+    do_location_id: int
 
 
 class PredictRequest(BaseModel):
     trips: List[TripInput]
 
 
-class PredictResponse(BaseModel):
-    results:    List[TripPrediction]
-    count:      int
-    unit:       str = "minutes"
-    model_path: str
+# --- API Endpoints ---
 
 
-class TrainRequest(BaseModel):
-    data_path: str = "data/concate_data/combined_tripdata_2025_all.parquet"
-    sample_n:   int = Field(100_000, ge=1000)
-    time_limit: int = Field(300, ge=60)
-    model_path: str = MODEL_PATH
-
-
-class NearbyZone(BaseModel):
-    location_id:    int
-    zone:           str
-    borough:        str
-    centroid_lon:   float
-    centroid_lat:   float
-    distance_km:    float
-
-
-# ─── Background training task ──────────────────────────────────────────────────
-def _train_task(req: TrainRequest):
-    global _predictor, _training_status, MODEL_PATH
-    from autogluon.tabular import TabularPredictor
-
-    _training_status["status"]     = "running"
-    _training_status["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    
+@app.post("/predict")
+def predict(req: PredictRequest):
+    """
+    Simultaneously runs inference on the Duration and Fare models.
+    """
     try:
-        logger.info("Loading data from %s …", req.data_path)
-        df = pd.read_parquet(req.data_path)
+        duration_engine = get_duration_predictor()
+        fare_engine = get_fare_predictor()
+        zones_data = get_zones_df()
 
-        # 1. Resolve Column Names (Fixes KeyError)
-        p_col = "tpep_pickup_datetime" if "tpep_pickup_datetime" in df.columns else "pickup_datetime"
-        d_col = "tpep_dropoff_datetime" if "tpep_dropoff_datetime" in df.columns else "dropoff_datetime"
-
-        # 2. Compute Target Variable
-        df["duration"] = (
-            (df[d_col] - df[p_col]).dt.total_seconds() / 60
-        ).round(2)
-
-        # 3. Filter and Select Features (Matches Prediction Schema)
-        df = df[(df["duration"] > 0) & (df["duration"] <= 70)].copy()
-        feature_cols = ["fare_amount", "PULocationID", "DOLocationID", "trip_distance", "duration"]
-        df = df[feature_cols].dropna().copy()
-
-        # 4. Sampling
-        sample_n = min(req.sample_n, len(df))
-        df = df.sample(n=sample_n, random_state=42).reset_index(drop=True)
-        logger.info("Training on %d rows with features: %s", len(df), feature_cols[:-1])
-
-        predictor = TabularPredictor(
-            label="duration",
-            problem_type="regression",
-            eval_metric="mae",
-            path=req.model_path,
-        )
-        
-        predictor.fit(
-            train_data=df,
-            presets=["medium_quality_faster_train", "optimize_for_deployment"],
-            time_limit=req.time_limit,
-            verbosity=2,
+        # Prepare data for AutoGluon models
+        input_data = pd.DataFrame(
+            [
+                {
+                    "PULocationID": t.pu_location_id,
+                    "DOLocationID": t.do_location_id,
+                    "trip_distance": t.trip_distance,
+                }
+                for t in req.trips
+            ]
         )
 
-        _predictor                      = predictor
-        MODEL_PATH                      = req.model_path
-        _training_status["status"]      = "done"
-        _training_status["message"]     = f"Success! Model saved to {req.model_path}."
-        _training_status["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # Run dual inference
+        duration_preds = duration_engine.predict(input_data)
+        fare_preds = fare_engine.predict(input_data)
 
-    except Exception as exc:
-        _training_status["status"]      = "error"
-        _training_status["message"]     = str(exc)
-        _training_status["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        logger.exception("Training failed.")
+        results = []
+        for i in range(len(req.trips)):
+            pu_id = req.trips[i].pu_location_id
+            do_id = req.trips[i].do_location_id
+
+            # Resolve zone names for UI display
+            pu_name, do_name = f"Zone {pu_id}", f"Zone {do_id}"
+            if zones_data is not None:
+                if pu_id in zones_data.index:
+                    row = zones_data.loc[pu_id]
+                    pu_name = f"{row['zone']} ({row['borough']})"
+                if do_id in zones_data.index:
+                    row = zones_data.loc[do_id]
+                    do_name = f"{row['zone']} ({row['borough']})"
+
+            results.append(
+                {
+                    "predicted_duration_minutes": round(
+                        float(duration_preds.iloc[i]), 2
+                    ),
+                    "predicted_fare_amount": round(float(fare_preds.iloc[i]), 2),
+                    "pickup_zone": pu_name,
+                    "dropoff_zone": do_name,
+                }
+            )
+
+        return {"results": results, "count": len(results)}
+    except Exception as e:
+        logger.error(f"Prediction logic error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+@app.get("/zones/nearby")
+def zones_nearby(lat: float, lon: float, top_n: int = 1):
+    """
+    Finds the nearest Taxi Zone ID based on map coordinates using the Haversine formula.
+    """
+    df = get_zones_df()
+    if df is None:
+        raise HTTPException(status_code=404, detail="Zone CSV data missing")
+
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371.0  # Earth radius in km
+        dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(math.radians(lat1))
+            * math.cos(math.radians(lat2))
+            * math.sin(dlon / 2) ** 2
+        )
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    temp_df = df.reset_index().copy()
+    temp_df["distance_km"] = temp_df.apply(
+        lambda r: haversine(lat, lon, r["centroid_lat"], r["centroid_lon"]), axis=1
+    )
+    return temp_df.nsmallest(top_n, "distance_km").to_dict(orient="records")
+
+
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "model_loaded": _predictor is not None,
-        "model_path": MODEL_PATH
-    }
+    return {"status": "online", "models_ready": ["duration", "fare"]}
 
-@app.post("/train")
-def train(req: TrainRequest, background_tasks: BackgroundTasks):
-    if _training_status["status"] == "running":
-        raise HTTPException(status_code=409, detail="Training in progress.")
-    background_tasks.add_task(_train_task, req)
-    return {"message": "Training started."}
 
-@app.get("/train/status")
-def train_status():
-    return _training_status
+if __name__ == "__main__":
+    import uvicorn
 
-@app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest):
-    predictor = get_predictor()
-    
-    # Strip incoming JSON to only the 4 features the model knows
-    rows = [build_feature_row(t) for t in req.trips]
-    df = pd.DataFrame(rows)
-    preds = predictor.predict(df).tolist()
-
-    try:
-        get_zones_df()
-        zones_available = True
-    except:
-        zones_available = False
-
-    results = []
-    for trip, duration in zip(req.trips, preds):
-        p_zone = zone_record(trip.pu_location_id) if zones_available else None
-        d_zone = zone_record(trip.do_location_id) if zones_available else None
-        results.append(TripPrediction(
-            predicted_duration_minutes=max(0, round(duration, 2)),
-            pickup_zone=ZoneInfo(**p_zone) if p_zone else None,
-            dropoff_zone=ZoneInfo(**d_zone) if d_zone else None,
-        ))
-
-    return PredictResponse(results=results, count=len(results), model_path=MODEL_PATH)
-
-@app.get("/zones", response_model=List[ZoneInfo])
-def list_zones(borough: Optional[str] = None):
-    df = get_zones_df().reset_index()
-    if borough:
-        df = df[df["borough"].str.lower() == borough.lower()]
-    return [ZoneInfo(**row.to_dict()) for _, row in df.iterrows()]
-
-@app.get("/zones/nearby", response_model=List[NearbyZone])
-def zones_nearby(lat: float, lon: float, top_n: int = 5):
-    df = get_zones_df().reset_index().copy()
-    df["distance_km"] = df.apply(lambda r: haversine_km(lat, lon, r["centroid_lat"], r["centroid_lon"]), axis=1)
-    nearest = df.nsmallest(top_n, "distance_km")
-    return [NearbyZone(**row.to_dict()) for _, row in nearest.iterrows()]
-
-@app.get("/zones/{location_id}", response_model=ZoneInfo)
-def get_zone(location_id: int):
-    record = zone_record(location_id)
-    if not record: raise HTTPException(status_code=404)
-    return ZoneInfo(**record)
+    # Start the server on localhost:8000
+    uvicorn.run(app, host="127.0.0.1", port=8000)
