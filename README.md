@@ -28,7 +28,9 @@ We define the problem as **predicting taxi trip distance and fare price** based 
 We use 2025 NYC TLC taxi trip data, aggregating 11 months of yellow and green taxi records — over **44 million trips** in total. We perform geospatial mapping using GeoPandas and TLC taxi zone files to convert pickup and dropoff LocationIDs into latitude/longitude centroids. Extreme outliers are removed by keeping only trips with durations between 0 and 70 minutes. A memory-optimized SQLite pipeline is used to handle large-scale data joins without system failures.
 
 ### AutoML Modeling
-Instead of a single hand-tuned model, we use **AutoGluon TabularPredictor** to automate model selection, training, and optimization on a sampled dataset of 200,000 cleaned records with an 80/20 train-test split. AutoGluon evaluates multiple model types — including LightGBM, XGBoost, CatBoost, Random Forest, and neural networks — and combines them into a weighted ensemble. This approach achieves an **MAE of ~1.88 minutes**, outperforming standalone models like XGBoost (MAE ~1.96 minutes).
+The latest `AutoML.ipynb` uses a compact, deployment-focused AutoGluon setup rather than a broad multi-model search. It standardizes the taxi datetime columns to `pickup_datetime` and `dropoff_datetime` for both yellow and green data, then trains two lightweight ensembles: `taxi_duration_quick` and `taxi_fare_quick`. The notebook uses only LightGBM and CatBoost, with `optimize_for_deployment` enabled and no bagging or stacking, so the saved models stay small and fast to load. On the sampled holdout set, this setup reaches roughly **4.03 MAE** for duration and **4.89 MAE** for fare.
+
+AutoGluon is a good fit here because it reduces manual model tuning while still producing strong results. The built-in ensemble structure helps combine the strengths of the underlying models, which improves prediction quality compared with relying on a single hand-picked model. In practice, this also makes the training workflow faster to iterate on and easier to deploy locally, since the final models are compact and ready to load without extra tuning.
 
 ### System Architecture
 The system is built in three layers:
@@ -42,8 +44,27 @@ An interactive NYC map interface allows users to select pickup and dropoff locat
 ---
 
 ## Data Sources
-https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page <br>
-Prosessed data URL through shared drive in parquet format: <br>
+NYC TLC trip record downloads: https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page <br>
+
+After downloading and preprocessing the data, the local project keeps it under `data/` in this layout:
+
+```text
+data/
+├── concate_data/
+│   ├── green_taxi_2025/
+│   └── yellow_taxi_2025/
+├── taxi_zones/
+│   ├── taxi_zones.shp
+│   ├── taxi_zones.shx
+│   ├── taxi_zones.dbf
+│   ├── taxi_zones.cpg
+│   └── taxi_zones.prj
+└── taxi_zone_centroids.csv
+```
+
+The app reads the centroid file at `data/taxi_zone_centroids.csv`, and the notebook pipeline uses the raw taxi-zone shapefile data in `data/taxi_zones/` plus the trip files in `data/concate_data/`.
+
+If you are starting from a fresh download, place the raw TLC parquet files into the matching year folders under `data/concate_data/` and keep the taxi zone shapefiles in `data/taxi_zones/` so the notebook and local API can resolve pickup/dropoff locations correctly.<br>
 
 ## AutoGluon Installation: https://auto.gluon.ai/stable/install.html <br>
 conda create -n autogluon-win python=3.10 -y<br>
